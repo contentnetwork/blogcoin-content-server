@@ -1,0 +1,24 @@
+language: cpp
+dist: xenial
+compiler:
+  - gcc
+cache:
+  directories:
+  - deps/openssl
+  - deps/sodium
+  - deps/boost
+sudo: true
+before_install:
+  - ./install-deps-linux.sh
+script:
+  - ls $PWD/deps/openssl
+  - >
+    PKG_CONFIG_PATH="$PWD/deps/sodium/lib/pkgconfig:$PWD/deps/openssl/lib/pkgconfig"
+    OPENSSL_ROOT_DIR="$PWD/deps/openssl"
+    BOOST_ROOT="$PWD/deps/boost"
+    make USE_SINGLE_BUILD_DIR=1 VERBOSE=1 OPENSSL_ROOT_DIR="$PWD/deps/openssl"
+  - ./build/unit_test/Test --log_level=unit_scope
+addons:
+  apt:
+    packages:
+      - pkg-config
