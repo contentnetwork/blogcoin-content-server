@@ -225,6 +225,7 @@ bool ServiceNode::snode_ready() {
     bool ready = true;
     ready = ready && hardfork_ >= STORAGE_SERVER_HARDFORK;
     ready = ready && swarm_;
+    ready = ready && !syncing_;
     return ready || force_start_;
 }
 
@@ -397,6 +398,10 @@ void ServiceNode::on_swarm_update(const block_update_t& bu) {
 
     hardfork_ = bu.hardfork;
 
+    if (syncing_ && bu.target_height != 0) {
+        syncing_ = bu.height < bu.target_height - 1;
+    }
+
     if (bu.block_hash != block_hash_) {
 
         LOKI_LOG(debug, "new block, height: {}, hash: {}", bu.height,
@@ -455,19 +460,18 @@ void ServiceNode::pow_difficulty_timer_tick(const pow_dns_callback_t cb) {
         boost::bind(&ServiceNode::pow_difficulty_timer_tick, this, cb));
 }
 
-static void
-parse_swarm_update(const std::shared_ptr<std::string>& response_body,
-                   const swarm_callback_t&& cb) {
+static block_update_t
+parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
 
     if (!response_body) {
         LOKI_LOG(error, "Bad lokid rpc response: no response body");
-        return;
+        throw std::runtime_error("Failed to parse swarm update");
     }
     const json body = json::parse(*response_body, nullptr, false);
     if (body.is_discarded()) {
         LOKI_LOG(trace, "Response body: {}", *response_body);
         LOKI_LOG(error, "Bad lokid rpc response: invalid json");
-        return;
+        throw std::runtime_error("Failed to parse swarm update");
     }
     std::map<swarm_id_t, std::vector<sn_record_t>> swarm_map;
     block_update_t bu;
@@ -494,30 +498,25 @@ parse_swarm_update(const std::shared_ptr<std::string>& response_body,
         }
 
         bu.height = body.at("result").at("height").get<uint64_t>();
+        bu.target_height =
+            body.at("result").at("target_height").get<uint64_t>();
         bu.block_hash = body.at("result").at("block_hash").get<std::string>();
         bu.hardfork = body.at("result").at("hardfork").get<int>();
 
     } catch (...) {
         LOKI_LOG(trace, "swarm repsonse: {}", body.dump(2));
         LOKI_LOG(error, "Bad lokid rpc response: invalid json fields");
-        return;
+        throw std::runtime_error("Failed to parse swarm update");
     }
 
     for (auto const& swarm : swarm_map) {
         bu.swarms.emplace_back(SwarmInfo{swarm.first, swarm.second});
     }
 
-    try {
-        cb(bu);
-    } catch (const std::exception& e) {
-        LOKI_LOG(error, "Exception caught on swarm update: {}", e.what());
-    }
+    return bu;
 }
 
 void ServiceNode::swarm_timer_tick() {
-    const swarm_callback_t cb =
-        std::bind(&ServiceNode::on_swarm_update, this, std::placeholders::_1);
-
     LOKI_LOG(trace, "UPDATING SWARMS: begin");
 
     json params;
@@ -528,16 +527,22 @@ void ServiceNode::swarm_timer_tick() {
     fields["storage_port"] = true;
     fields["public_ip"] = true;
     fields["height"] = true;
+    fields["target_height"] = true;
     fields["block_hash"] = true;
     fields["hardfork"] = true;
 
     params["fields"] = fields;
 
     lokid_client_.make_lokid_request(
-        "get_n_service_nodes", params,
-        [cb = std::move(cb)](const sn_response_t&& res) {
+        "get_n_service_nodes", params, [this](const sn_response_t&& res) {
             if (res.error_code == SNodeError::NO_ERROR) {
-                parse_swarm_update(res.body, std::move(cb));
+                try {
+                    const block_update_t bu = parse_swarm_update(res.body);
+                    on_swarm_update(bu);
+                } catch (const std::exception& e) {
+                    LOKI_LOG(error, "Exception caught on swarm update: {}",
+                             e.what());
+                }
             }
         });
 
@@ -568,12 +573,13 @@ void ServiceNode::lokid_ping_timer_tick() {
             try {
                 json res_json = json::parse(*res.body);
 
-                if (res_json.at("result").at("status").get<std::string>() == "OK") {
+                if (res_json.at("result").at("status").get<std::string>() ==
+                    "OK") {
                     LOKI_LOG(info, "Successfully pinged lokid");
                 } else {
                     LOKI_LOG(info, "PING status is NOT OK");
                 }
-            } catch(...) {
+            } catch (...) {
                 LOKI_LOG(error, "Bad json");
             }
 

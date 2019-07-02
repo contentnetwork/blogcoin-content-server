@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8.0)
+cmake_minimum_required(VERSION 3.1)
 
 add_definitions(-DDISABLE_ENCRYPTION)
 add_definitions(-DSPDLOG_COMPILED_LIB)
@@ -31,6 +31,7 @@ set(SRC_FILES
     )
 
 add_executable(httpserver ${HEADER_FILES} ${SRC_FILES})
+install(TARGETS httpserver DESTINATION bin)
 
 loki_add_subdirectory(../storage storage)
 loki_add_subdirectory(../utils utils)

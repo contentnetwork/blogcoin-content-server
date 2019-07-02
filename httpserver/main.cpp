@@ -111,6 +111,7 @@ static void init_logging(const fs::path& data_dir,
 
     auto logger = std::make_shared<spdlog::logger>("loki_logger", sinks.begin(),
                                                    sinks.end());
+    logger->set_level(log_level);
     spdlog::register_logger(logger);
     spdlog::flush_every(std::chrono::seconds(1));
 
@@ -134,26 +135,42 @@ int main(int argc, char* argv[]) {
 
         std::string data_dir_str = data_dir.string();
         std::string log_level_string("info");
-        bool print_version = false;
+        std::string config_file;
         bool force_start = false;
         uint16_t lokid_rpc_port = 22023;
+        std::string ip;
+        uint16_t port;
 
-        po::options_description desc;
+        po::options_description all, desc, hidden;
         // clang-format off
         desc.add_options()
             ("lokid-key", po::value(&lokid_key_path), "Path to the Service Node key file")
-            ("data-dir", po::value(&data_dir_str),"Path to persistent data")
+            ("data-dir", po::value(&data_dir_str), "Path to persistent data (defaults to ~/.loki/storage)")
+            ("config-file", po::value(&config_file), "Path to custom config file (defaults to `storage-server.conf' inside --data-dir)")
             ("log-level", po::value(&log_level_string), "Log verbosity level, see Log Levels below for accepted values")
-            ("version,v", po::bool_switch(&print_version), "Print the version of this binary")
             ("lokid-rpc-port", po::value(&lokid_rpc_port), "RPC port on which the local Loki daemon is listening")
-            ("force-start", po::bool_switch(&force_start), "Ignore the initialisation ready check");
+            ("force-start", po::bool_switch(&force_start), "Ignore the initialisation ready check")
+            ("version,v", "Print the version of this binary")
+            ("help", "Shows this help message");
+        // Add hidden ip and port options.  You technically can use the `--ip=` and `--port=` with
+        // these here, but they are meant to be positional.  More usefully, you can specify `ip=`
+        // and `port=` in the config file to specify them.
+        hidden.add_options()
+            ("ip", po::value(&ip), "IP to listen on")
+            ("port", po::value(&port), "Port to listen on");
         // clang-format on
 
-        po::variables_map vm;
-        po::store(po::parse_command_line(argc, argv, desc), vm);
-        po::notify(vm);
+        all.add(desc).add(hidden);
+        po::positional_options_description pos_desc;
+        pos_desc.add("ip", 1);
+        pos_desc.add("port", 1);
 
-        if (argc < 2) {
+        po::variables_map vm;
+        try {
+            po::store(po::command_line_parser(argc, argv).options(all).positional(pos_desc).run(), vm);
+            po::notify(vm);
+        } catch (const boost::program_options::error &e) {
+            std::cerr << "Invalid options: " << e.what() << std::endl;
             print_usage(desc, argv);
             return EXIT_FAILURE;
         }
@@ -164,20 +181,36 @@ int main(int argc, char* argv[]) {
                   << std::endl
                   << " build time: " << STORAGE_SERVER_BUILD_TIME << std::endl;
 
-        if (print_version) {
+        if (vm.count("version")) {
             return EXIT_SUCCESS;
         }
 
-        if (argc < 3) {
+        if (vm.count("help")) {
             print_usage(desc, argv);
-            return EXIT_FAILURE;
+            return EXIT_SUCCESS;
         }
-
-        const auto port = static_cast<uint16_t>(std::atoi(argv[2]));
-        std::string ip = argv[1];
 
         if (!fs::exists(data_dir_str)) {
             fs::create_directories(data_dir_str);
+        }
+
+        if (config_file.empty()) {
+            config_file = (fs::path(data_dir_str) / "storage-server.conf").string();
+        }
+        if (fs::exists(config_file)) {
+            try {
+                po::store(po::parse_config_file<char>(config_file.c_str(), all), vm);
+                po::notify(vm);
+            } catch (const boost::program_options::error &e) {
+                std::cerr << "Invalid options in config file: " << e.what() << std::endl;
+                print_usage(desc, argv);
+                return EXIT_FAILURE;
+            }
+        }
+
+        if (!vm.count("ip") || !vm.count("port")) {
+            print_usage(desc, argv);
+            return EXIT_FAILURE;
         }
 
         spdlog::level::level_enum log_level;
