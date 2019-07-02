@@ -131,24 +131,24 @@ int main(int argc, char* argv[]) {
 
         const auto home_dir = get_home_dir();
         const fs::path data_dir =
-            home_dir ? (*home_dir / ".loki" / "storage") : ".";
+            home_dir ? (*home_dir / ".bittoro" / "storage") : ".";
 
         std::string data_dir_str = data_dir.string();
         std::string log_level_string("info");
         std::string config_file;
         bool force_start = false;
-        uint16_t lokid_rpc_port = 22023;
+        uint16_t lokid_rpc_port = 11045;
         std::string ip;
         uint16_t port;
 
         po::options_description all, desc, hidden;
         // clang-format off
         desc.add_options()
-            ("lokid-key", po::value(&lokid_key_path), "Path to the Service Node key file")
-            ("data-dir", po::value(&data_dir_str), "Path to persistent data (defaults to ~/.loki/storage)")
+            ("bittorod-key", po::value(&lokid_key_path), "Path to the Service Node key file")
+            ("data-dir", po::value(&data_dir_str), "Path to persistent data (defaults to ~/.bittoro/storage)")
             ("config-file", po::value(&config_file), "Path to custom config file (defaults to `storage-server.conf' inside --data-dir)")
             ("log-level", po::value(&log_level_string), "Log verbosity level, see Log Levels below for accepted values")
-            ("lokid-rpc-port", po::value(&lokid_rpc_port), "RPC port on which the local Loki daemon is listening")
+            ("bittorod-rpc-port", po::value(&lokid_rpc_port), "RPC port on which the local BitToro daemon is listening")
             ("force-start", po::bool_switch(&force_start), "Ignore the initialisation ready check")
             ("version,v", "Print the version of this binary")
             ("help", "Shows this help message");
@@ -175,7 +175,7 @@ int main(int argc, char* argv[]) {
             return EXIT_FAILURE;
         }
 
-        std::cout << "Loki Storage Server v" << STORAGE_SERVER_VERSION_STRING
+        std::cout << "BitToro Storage Server v" << STORAGE_SERVER_VERSION_STRING
                   << std::endl
                   << " git commit hash: " << STORAGE_SERVER_GIT_HASH_STRING
                   << std::endl
@@ -226,12 +226,12 @@ int main(int argc, char* argv[]) {
 
         LOKI_LOG(info, "Setting database location to {}", data_dir_str);
 
-        if (vm.count("lokid-key")) {
-            LOKI_LOG(info, "Setting Lokid key path to {}", lokid_key_path);
+        if (vm.count("bittorod-key")) {
+            LOKI_LOG(info, "Setting bittorod key path to {}", lokid_key_path);
         }
 
-        if (vm.count("lokid-rpc-port")) {
-            LOKI_LOG(info, "Setting lokid RPC port to {}", lokid_rpc_port);
+        if (vm.count("bittorod-rpc-port")) {
+            LOKI_LOG(info, "Setting bittorod RPC port to {}", lokid_rpc_port);
         }
 
         LOKI_LOG(info, "Listening at address {} port {}", ip, port);
