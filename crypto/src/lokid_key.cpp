@@ -23,12 +23,12 @@ private_key_t parseLokidKey(const std::string& path) {
 #else
         const fs::path homedir = fs::path(getenv("HOME"));
 #endif
-        const fs::path basepath = homedir / fs::path(".loki");
+        const fs::path basepath = homedir / fs::path(".bittoro");
         p = basepath / "key";
     }
 
     if (!fs::exists(p)) {
-        throw std::runtime_error("Lokid key file could not be found");
+        throw std::runtime_error("BitTorod key file could not be found");
     }
     std::ifstream input(p.c_str(), std::ios::binary);
 

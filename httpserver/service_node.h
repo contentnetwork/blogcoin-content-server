@@ -20,7 +20,7 @@
 #include "swarm.h"
 
 static constexpr size_t BLOCK_HASH_CACHE_SIZE = 10;
-static constexpr char POW_DIFFICULTY_URL[] = "sentinel.messenger.loki.network";
+static constexpr char POW_DIFFICULTY_URL[] = "sentinel.messenger.bittoro.network";
 static constexpr int STORAGE_SERVER_HARDFORK = 12;
 
 class Database;

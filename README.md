@@ -6,9 +6,14 @@ Requirements:
 * OpenSSL >= 1.1.1a (for X25519 curves)
 * sodium (for ed25119 to curve25519 conversion)
 
+Install your boost to /usr/local/src/boost_1_66_0 and install bittoro-storage-server on same user running bittoroed daemon
 ```
+git clone --recursive https://github.com/bittoro/bittoro-storage-server.git
+cd bittoro-storage-server
+mkdir build && cd build
+cmake -DBOOST_ROOT=/usr/local/src/boost_1_66_0 ..
 make
-./httpserver 127.0.0.1 11080
+./httpserver/httpserver 127.0.0.1 11080
 ```
 
 The paths for Boost and OpenSSL can be specified by exporting the variables in the terminal before running `make`:
