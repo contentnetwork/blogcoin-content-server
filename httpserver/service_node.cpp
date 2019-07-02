@@ -464,13 +464,13 @@ static block_update_t
 parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
 
     if (!response_body) {
-        LOKI_LOG(error, "Bad lokid rpc response: no response body");
+        LOKI_LOG(error, "Bad bittorod rpc response: no response body");
         throw std::runtime_error("Failed to parse swarm update");
     }
     const json body = json::parse(*response_body, nullptr, false);
     if (body.is_discarded()) {
         LOKI_LOG(trace, "Response body: {}", *response_body);
-        LOKI_LOG(error, "Bad lokid rpc response: invalid json");
+        LOKI_LOG(error, "Bad bittorod rpc response: invalid json");
         throw std::runtime_error("Failed to parse swarm update");
     }
     std::map<swarm_id_t, std::vector<sn_record_t>> swarm_map;
@@ -505,7 +505,7 @@ parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
 
     } catch (...) {
         LOKI_LOG(trace, "swarm repsonse: {}", body.dump(2));
-        LOKI_LOG(error, "Bad lokid rpc response: invalid json fields");
+        LOKI_LOG(error, "Bad bittorod rpc response: invalid json fields");
         throw std::runtime_error("Failed to parse swarm update");
     }
 
@@ -566,7 +566,7 @@ void ServiceNode::lokid_ping_timer_tick() {
         if (res.error_code == SNodeError::NO_ERROR) {
 
             if (!res.body) {
-                LOKI_LOG(error, "Empty body on Lokid ping");
+                LOKI_LOG(error, "Empty body on bittorod ping");
                 return;
             }
 
@@ -575,7 +575,7 @@ void ServiceNode::lokid_ping_timer_tick() {
 
                 if (res_json.at("result").at("status").get<std::string>() ==
                     "OK") {
-                    LOKI_LOG(info, "Successfully pinged lokid");
+                    LOKI_LOG(info, "Successfully pinged bittorod");
                 } else {
                     LOKI_LOG(info, "PING status is NOT OK");
                 }
@@ -584,7 +584,7 @@ void ServiceNode::lokid_ping_timer_tick() {
             }
 
         } else {
-            LOKI_LOG(warn, "Could not ping lokid");
+            LOKI_LOG(warn, "Could not ping bittorod");
         }
     };
 
@@ -613,7 +613,7 @@ void ServiceNode::perform_blockchain_test(
     bc_test_params_t test_params,
     std::function<void(blockchain_test_answer_t)>&& cb) const {
 
-    LOKI_LOG(debug, "Delegating blockchain test to lokid");
+    LOKI_LOG(debug, "Delegating blockchain test to bittorod");
 
     nlohmann::json params;
 
@@ -622,14 +622,14 @@ void ServiceNode::perform_blockchain_test(
 
     auto on_resp = [cb = std::move(cb)](const sn_response_t& resp) {
         if (resp.error_code != SNodeError::NO_ERROR || !resp.body) {
-            LOKI_LOG(error, "Could not send blockchain request to Lokid");
+            LOKI_LOG(error, "Could not send blockchain request to bittorod");
             return;
         }
 
         const json body = json::parse(*resp.body, nullptr, false);
 
         if (body.is_discarded()) {
-            LOKI_LOG(error, "Bad lokid rpc response: invalid json");
+            LOKI_LOG(error, "Bad bittorod rpc response: invalid json");
             return;
         }
 
