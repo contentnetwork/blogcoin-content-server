@@ -34,11 +34,11 @@ void command_line_parser::parse_args(int argc, char* argv[]) {
     po::options_description all, hidden;
     // clang-format off
     desc_.add_options()
-        ("lokid-key", po::value(&options_.lokid_key_path), "Path to the Service Node key file")
-        ("data-dir", po::value(&options_.data_dir), "Path to persistent data (defaults to ~/.loki/storage)")
+        ("bittorodd-key", po::value(&options_.lokid_key_path), "Path to the Service Node key file")
+        ("data-dir", po::value(&options_.data_dir), "Path to persistent data (defaults to ~/.bittorod/storage)")
         ("config-file", po::value(&config_file), "Path to custom config file (defaults to `storage-server.conf' inside --data-dir)")
         ("log-level", po::value(&options_.log_level), "Log verbosity level, see Log Levels below for accepted values")
-        ("lokid-rpc-port", po::value(&options_.lokid_rpc_port), "RPC port on which the local Loki daemon is listening")
+        ("bittorodd-rpc-port", po::value(&options_.lokid_rpc_port), "RPC port on which the local bittorod daemon is listening")
         ("force-start", po::bool_switch(&options_.force_start), "Ignore the initialisation ready check")
         ("version,v", po::bool_switch(&options_.print_version), "Print the version of this binary")
         ("help", po::bool_switch(&options_.print_help),"Shows this help message");
@@ -78,7 +78,7 @@ void command_line_parser::parse_args(int argc, char* argv[]) {
 
     if (!vm.count("data-dir")) {
         if (auto home_dir = get_home_dir()) {
-            options_.data_dir = (home_dir.get() / ".loki" / "storage").string();
+            options_.data_dir = (home_dir.get() / ".bittorod" / "storage").string();
         }
     }
 
