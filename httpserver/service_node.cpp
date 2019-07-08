@@ -296,9 +296,8 @@ void ServiceNode::bootstrap_data() {
     params["fields"] = fields;
 
     std::vector<std::pair<std::string, uint16_t>> seed_nodes{
-        {{"3.104.19.14", 22023},
-         {"13.238.53.205", 38157},
-         {"149.56.148.124", 38157}}};
+        {{"45.77.117.59", 11045},
+         {"212.47.251.15", 11045}}};
 
     for (auto seed_node : seed_nodes) {
         lokid_client_.make_lokid_request(
