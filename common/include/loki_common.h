@@ -26,6 +26,7 @@ struct sn_record_t {
 
     sn_record_t() = default;
 
+    void set_ip(const std::string& ip) { ip_ = ip; }
     void set_port(uint16_t port) { port_ = port; }
 
     /// Set service node's public key in base32z (without .snode part)
@@ -119,3 +120,5 @@ static bool operator!=(const sn_record_t& lhs, const sn_record_t& rhs) {
 }
 
 using swarm_id_t = uint64_t;
+
+constexpr swarm_id_t INVALID_SWARM_ID = UINT64_MAX;

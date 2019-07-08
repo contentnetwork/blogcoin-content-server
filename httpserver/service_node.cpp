@@ -222,10 +222,110 @@ ServiceNode::ServiceNode(boost::asio::io_context& ioc,
     });
 }
 
+static block_update_t
+parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
+
+    if (!response_body) {
+        LOKI_LOG(error, "Bad bittorod rpc response: no response body");
+        throw std::runtime_error("Failed to parse swarm update");
+    }
+    const json body = json::parse(*response_body, nullptr, false);
+    if (body.is_discarded()) {
+        LOKI_LOG(trace, "Response body: {}", *response_body);
+        LOKI_LOG(error, "Bad bittorod rpc response: invalid json");
+        throw std::runtime_error("Failed to parse swarm update");
+    }
+    std::map<swarm_id_t, std::vector<sn_record_t>> swarm_map;
+    block_update_t bu;
+
+    try {
+        const json service_node_states =
+            body.at("result").at("service_node_states");
+
+        for (const auto& sn_json : service_node_states) {
+            const std::string pubkey =
+                sn_json.at("service_node_pubkey").get<std::string>();
+
+            const swarm_id_t swarm_id =
+                sn_json.at("swarm_id").get<swarm_id_t>();
+            std::string snode_address = util::hex64_to_base32z(pubkey);
+
+            const uint16_t port = sn_json.at("storage_port").get<uint16_t>();
+            const std::string snode_ip =
+                sn_json.at("public_ip").get<std::string>();
+            const sn_record_t sn{port, std::move(snode_address),
+                                 std::move(snode_ip)};
+
+            swarm_map[swarm_id].push_back(sn);
+        }
+
+        bu.height = body.at("result").at("height").get<uint64_t>();
+        bu.target_height =
+            body.at("result").at("target_height").get<uint64_t>();
+        bu.block_hash = body.at("result").at("block_hash").get<std::string>();
+        bu.hardfork = body.at("result").at("hardfork").get<int>();
+
+    } catch (...) {
+        LOKI_LOG(trace, "swarm repsonse: {}", body.dump(2));
+        LOKI_LOG(error, "Bad bittorod rpc response: invalid json fields");
+        throw std::runtime_error("Failed to parse swarm update");
+    }
+
+    for (auto const& swarm : swarm_map) {
+        bu.swarms.emplace_back(SwarmInfo{swarm.first, swarm.second});
+    }
+
+    return bu;
+}
+
+void ServiceNode::bootstrap_data() {
+    LOKI_LOG(trace, "Bootstrapping peer ips");
+
+    json params;
+    json fields;
+
+    fields["service_node_pubkey"] = true;
+    fields["swarm_id"] = true;
+    fields["storage_port"] = true;
+    fields["public_ip"] = true;
+    fields["height"] = true;
+    fields["target_height"] = true;
+    fields["block_hash"] = true;
+    fields["hardfork"] = true;
+
+    params["fields"] = fields;
+
+    std::vector<std::pair<std::string, uint16_t>> seed_nodes{
+        {{"3.104.19.14", 22023},
+         {"13.238.53.205", 38157},
+         {"149.56.148.124", 38157}}};
+
+    for (auto seed_node : seed_nodes) {
+        lokid_client_.make_lokid_request(
+            seed_node.first, seed_node.second, "get_n_service_nodes", params,
+            [this, seed_node](const sn_response_t&& res) {
+                if (res.error_code == SNodeError::NO_ERROR) {
+                    try {
+                        const block_update_t bu = parse_swarm_update(res.body);
+                        on_bootstrap_update(bu);
+                    } catch (const std::exception& e) {
+                        LOKI_LOG(
+                            error,
+                            "Exception caught while bootstrapping from {}: {}",
+                            seed_node.first, e.what());
+                    }
+                } else {
+                    LOKI_LOG(error, "Failed to contact bootstrap node {}",
+                             seed_node.first);
+                }
+            });
+    }
+}
+
 bool ServiceNode::snode_ready() {
     bool ready = true;
     ready = ready && hardfork_ >= STORAGE_SERVER_HARDFORK;
-    ready = ready && swarm_;
+    ready = ready && swarm_ && swarm_->is_valid();
     ready = ready && !syncing_;
     return ready || force_start_;
 }
@@ -268,9 +368,46 @@ void ServiceNode::send_sn_request(const std::shared_ptr<request_t>& req,
 
 void ServiceNode::register_listener(const std::string& pk,
                                     const std::shared_ptr<connection_t>& c) {
+
+    // NOTE: it is the responsibility of connection_t to deregister itself!
     pk_to_listeners[pk].push_back(c);
-    LOKI_LOG(debug, "register pubkey: {}, total pubkeys: {}", pk,
+    LOKI_LOG(debug, "Register pubkey: {}, total pubkeys: {}", pk,
              pk_to_listeners.size());
+
+    LOKI_LOG(debug, "Number of connections listening for {}: {}", pk,
+             pk_to_listeners[pk].size());
+}
+
+void ServiceNode::remove_listener(const std::string& pk,
+                                  const connection_t* const c) {
+
+    const auto it = pk_to_listeners.find(pk);
+    if (it == pk_to_listeners.end()) {
+        /// This will sometimes happen because we reset all listeners on
+        /// push_all
+        LOKI_LOG(debug, "Trying to remove an unknown pk from the notification "
+                        "map. Operation ignored.");
+    } else {
+        LOKI_LOG(trace,
+                 "Deregistering notification for connection {} for pk {}",
+                 c->conn_idx, pk);
+        auto& cs = it->second;
+        const auto new_end = std::remove_if(
+            cs.begin(), cs.end(), [c](const std::shared_ptr<connection_t>& e) {
+                return e.get() == c;
+            });
+        const auto count = std::distance(new_end, cs.end());
+        cs.erase(new_end, cs.end());
+
+        if (count == 0) {
+            LOKI_LOG(debug, "Connection {} in not registered for pk {}",
+                     c->conn_idx, pk);
+        } else if (count > 1) {
+            LOKI_LOG(debug,
+                     "Multiple registrations ({}) for connection {} for pk {}",
+                     count, c->conn_idx, pk);
+        }
+    }
 }
 
 void ServiceNode::notify_listeners(const std::string& pk,
@@ -300,7 +437,8 @@ void ServiceNode::reset_listeners() {
     /// simplicity
     for (auto& entry : pk_to_listeners) {
         for (auto& c : entry.second) {
-            c->reset();
+            /// notify with no messages
+            c->notify(boost::none);
         }
     }
 
@@ -391,16 +529,33 @@ void ServiceNode::save_bulk(const std::vector<Item>& items) {
     reset_listeners();
 }
 
+void ServiceNode::on_sync_complete() {
+
+#ifndef INTEGRATION_TEST
+    bootstrap_data();
+#endif
+}
+
+void ServiceNode::on_bootstrap_update(const block_update_t& bu) {
+
+    swarm_->bootstrap_state(bu.swarms);
+}
+
 void ServiceNode::on_swarm_update(const block_update_t& bu) {
-    if (!swarm_) {
-        LOKI_LOG(info, "Initialized our swarm");
-        swarm_ = std::make_unique<Swarm>(our_address_);
-    }
 
     hardfork_ = bu.hardfork;
 
+    bool sync_complete = false;
+
     if (syncing_ && bu.target_height != 0) {
         syncing_ = bu.height < bu.target_height - 1;
+        sync_complete = !syncing_;
+    }
+
+    /// We don't have anything to do until we have synced
+    if (syncing_) {
+        LOKI_LOG(debug, "Still syncing: {}/{}", bu.height, bu.target_height);
+        return;
     }
 
     if (bu.block_hash != block_hash_) {
@@ -408,7 +563,7 @@ void ServiceNode::on_swarm_update(const block_update_t& bu) {
         LOKI_LOG(debug, "new block, height: {}, hash: {}", bu.height,
                  bu.block_hash);
 
-        if (bu.height > block_height_ + 1) {
+        if (bu.height > block_height_ + 1 && block_height_ != 0) {
             LOKI_LOG(warn, "Skipped some block(s), old: {} new: {}",
                      block_height_, bu.height);
             /// TODO: if we skipped a block, should we try to run peer tests for
@@ -429,11 +584,26 @@ void ServiceNode::on_swarm_update(const block_update_t& bu) {
         return;
     }
 
-    const SwarmEvents events = swarm_->update_swarms(bu.swarms);
+    if (!swarm_) {
+        LOKI_LOG(info, "Initialized our swarm");
+        swarm_ = std::make_unique<Swarm>(our_address_);
+    }
+
+    const SwarmEvents events = swarm_->derive_swarm_events(bu.swarms);
+
+    swarm_->set_swarm_id(events.our_swarm_id);
 
     if (!snode_ready()) {
+        LOKI_LOG(warn, "Service Node is still not ready");
         return;
     }
+
+    swarm_->update_state(bu.swarms, events);
+
+    if (sync_complete) {
+        on_sync_complete();
+    }
+
     if (!events.new_snodes.empty()) {
         bootstrap_peers(events.new_snodes);
     }
@@ -461,64 +631,8 @@ void ServiceNode::pow_difficulty_timer_tick(const pow_dns_callback_t cb) {
         boost::bind(&ServiceNode::pow_difficulty_timer_tick, this, cb));
 }
 
-static block_update_t
-parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
-
-    if (!response_body) {
-        LOKI_LOG(error, "Bad bittorod rpc response: no response body");
-        throw std::runtime_error("Failed to parse swarm update");
-    }
-    const json body = json::parse(*response_body, nullptr, false);
-    if (body.is_discarded()) {
-        LOKI_LOG(trace, "Response body: {}", *response_body);
-        LOKI_LOG(error, "Bad bittorod rpc response: invalid json");
-        throw std::runtime_error("Failed to parse swarm update");
-    }
-    std::map<swarm_id_t, std::vector<sn_record_t>> swarm_map;
-    block_update_t bu;
-
-    try {
-        const json service_node_states =
-            body.at("result").at("service_node_states");
-
-        for (const auto& sn_json : service_node_states) {
-            const std::string pubkey =
-                sn_json.at("service_node_pubkey").get<std::string>();
-
-            const swarm_id_t swarm_id =
-                sn_json.at("swarm_id").get<swarm_id_t>();
-            std::string snode_address = util::hex64_to_base32z(pubkey);
-
-            const uint16_t port = sn_json.at("storage_port").get<uint16_t>();
-            const std::string snode_ip =
-                sn_json.at("public_ip").get<std::string>();
-            const sn_record_t sn{port, std::move(snode_address),
-                                 std::move(snode_ip)};
-
-            swarm_map[swarm_id].push_back(sn);
-        }
-
-        bu.height = body.at("result").at("height").get<uint64_t>();
-        bu.target_height =
-            body.at("result").at("target_height").get<uint64_t>();
-        bu.block_hash = body.at("result").at("block_hash").get<std::string>();
-        bu.hardfork = body.at("result").at("hardfork").get<int>();
-
-    } catch (...) {
-        LOKI_LOG(trace, "swarm repsonse: {}", body.dump(2));
-        LOKI_LOG(error, "Bad bittorod rpc response: invalid json fields");
-        throw std::runtime_error("Failed to parse swarm update");
-    }
-
-    for (auto const& swarm : swarm_map) {
-        bu.swarms.emplace_back(SwarmInfo{swarm.first, swarm.second});
-    }
-
-    return bu;
-}
-
 void ServiceNode::swarm_timer_tick() {
-    LOKI_LOG(trace, "UPDATING SWARMS: begin");
+    LOKI_LOG(trace, "Swarm timer tick");
 
     json params;
     json fields;
@@ -578,10 +692,10 @@ void ServiceNode::lokid_ping_timer_tick() {
                     "OK") {
                     LOKI_LOG(info, "Successfully pinged bittorod");
                 } else {
-                    LOKI_LOG(info, "PING status is NOT OK");
+                    LOKI_LOG(error, "Could not ping bittorod: status is NOT OK");
                 }
             } catch (...) {
-                LOKI_LOG(error, "Bad json");
+                LOKI_LOG(error, "Could not ping bittorod: bad json in response");
             }
 
         } else {
@@ -797,7 +911,7 @@ bool ServiceNode::derive_tester_testee(uint64_t blk_height, sn_record_t& tester,
     members.push_back(our_address_);
 
     if (members.size() < 2) {
-        LOKI_LOG(error, "Could not initiate peer test: swarm too small");
+        LOKI_LOG(warn, "Could not initiate peer test: swarm too small");
         return false;
     }
 
@@ -903,7 +1017,7 @@ bool ServiceNode::select_random_message(Item& item) {
         return false;
     }
 
-    LOKI_LOG(info, "total messages: {}", message_count);
+    LOKI_LOG(debug, "total messages: {}", message_count);
 
     if (message_count == 0) {
         LOKI_LOG(warn, "No messages in the database to initiate a peer test");
@@ -946,7 +1060,7 @@ void ServiceNode::initiate_peer_test() {
         // 2.1. Select a message
         Item item;
         if (!this->select_random_message(item)) {
-            LOKI_LOG(error, "Could not select a message for testing");
+            LOKI_LOG(warn, "Could not select a message for testing");
         } else {
             LOKI_LOG(trace, "Selected random message: {}, {}", item.hash,
                      item.data);
@@ -1108,7 +1222,7 @@ void ServiceNode::relay_messages(const std::vector<storage::Item>& messages,
     }
 #endif
 
-    LOKI_LOG(info, "Serialised batches: {}", data.size());
+    LOKI_LOG(debug, "Serialised batches: {}", data.size());
     for (const sn_record_t& sn : snodes) {
         for (const std::shared_ptr<request_t>& batch : batches) {
             send_sn_request(batch, sn);

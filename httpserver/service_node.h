@@ -19,7 +19,7 @@
 #include "stats.h"
 #include "swarm.h"
 
-static constexpr size_t BLOCK_HASH_CACHE_SIZE = 10;
+static constexpr size_t BLOCK_HASH_CACHE_SIZE = 20;
 static constexpr char POW_DIFFICULTY_URL[] = "sentinel.messenger.bittoro.network";
 static constexpr int STORAGE_SERVER_HARDFORK = 12;
 
@@ -138,7 +138,13 @@ class ServiceNode {
     /// request swarm info from the blockchain
     void update_swarms();
 
+    void on_sync_complete();
+
+    void on_bootstrap_update(const block_update_t& bu);
+
     void on_swarm_update(const block_update_t& bu);
+
+    void bootstrap_data();
 
     void bootstrap_peers(const std::vector<sn_record_t>& peers) const;
 
@@ -211,6 +217,9 @@ class ServiceNode {
     // Register a connection as waiting for new data for pk
     void register_listener(const std::string& pk,
                            const connection_ptr& connection);
+
+    void remove_listener(const std::string& pk,
+                         const http_server::connection_t* const connection);
 
     // Notify listeners of a new message for pk
     void notify_listeners(const std::string& pk, const message_t& msg);

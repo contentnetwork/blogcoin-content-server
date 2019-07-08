@@ -11,20 +11,6 @@ namespace loki {
 namespace po = boost::program_options;
 namespace fs = boost::filesystem;
 
-static boost::optional<fs::path> get_home_dir() {
-
-    /// TODO: support default dir for Windows
-#ifdef WIN32
-    return boost::none;
-#endif
-
-    char* pszHome = getenv("HOME");
-    if (pszHome == NULL || strlen(pszHome) == 0)
-        return boost::none;
-
-    return fs::path(pszHome);
-}
-
 const command_line_options& command_line_parser::get_options() const {
     return options_;
 }
@@ -34,11 +20,11 @@ void command_line_parser::parse_args(int argc, char* argv[]) {
     po::options_description all, hidden;
     // clang-format off
     desc_.add_options()
-        ("bittorodd-key", po::value(&options_.lokid_key_path), "Path to the Service Node key file")
-        ("data-dir", po::value(&options_.data_dir), "Path to persistent data (defaults to ~/.bittorod/storage)")
+        ("bittorod-key", po::value(&options_.lokid_key_path), "Path to the Service Node key file")
+        ("data-dir", po::value(&options_.data_dir), "Path to persistent data (defaults to ~/.bittoro/storage)")
         ("config-file", po::value(&config_file), "Path to custom config file (defaults to `storage-server.conf' inside --data-dir)")
         ("log-level", po::value(&options_.log_level), "Log verbosity level, see Log Levels below for accepted values")
-        ("bittorodd-rpc-port", po::value(&options_.lokid_rpc_port), "RPC port on which the local bittorod daemon is listening")
+        ("bittorod-rpc-port", po::value(&options_.lokid_rpc_port), "RPC port on which the local bittorod daemon is listening")
         ("force-start", po::bool_switch(&options_.force_start), "Ignore the initialisation ready check")
         ("version,v", po::bool_switch(&options_.print_version), "Print the version of this binary")
         ("help", po::bool_switch(&options_.print_help),"Shows this help message");
@@ -74,12 +60,9 @@ void command_line_parser::parse_args(int argc, char* argv[]) {
     if (fs::exists(config_file)) {
         po::store(po::parse_config_file<char>(config_file.c_str(), all), vm);
         po::notify(vm);
-    }
-
-    if (!vm.count("data-dir")) {
-        if (auto home_dir = get_home_dir()) {
-            options_.data_dir = (home_dir.get() / ".bittorod" / "storage").string();
-        }
+    } else if (vm.count("config-file")) {
+        throw std::runtime_error(
+            "path provided in --config-file does not exist");
     }
 
     if (options_.print_version || options_.print_help) {
