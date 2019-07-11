@@ -209,8 +209,12 @@ ServiceNode::ServiceNode(boost::asio::io_context& ioc,
     // TODO: fail hard if we can't encode our public key
     LOKI_LOG(info, "Read our snode address: {}", our_address_);
     our_address_.set_port(port);
+    swarm_ = std::make_unique<Swarm>(our_address_);
 
     LOKI_LOG(info, "Requesting initial swarm state");
+    #ifndef INTEGRATION_TEST
+        bootstrap_data();
+    #endif
     swarm_timer_tick();
     lokid_ping_timer_tick();
     cleanup_timer_tick();
@@ -260,8 +264,6 @@ parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
         }
 
         bu.height = body.at("result").at("height").get<uint64_t>();
-        bu.target_height =
-            body.at("result").at("target_height").get<uint64_t>();
         bu.block_hash = body.at("result").at("block_hash").get<std::string>();
         bu.hardfork = body.at("result").at("hardfork").get<int>();
 
@@ -279,7 +281,7 @@ parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
 }
 
 void ServiceNode::bootstrap_data() {
-    LOKI_LOG(trace, "Bootstrapping peer ips");
+    LOKI_LOG(trace, "Bootstrapping peer data");
 
     json params;
     json fields;
@@ -289,7 +291,6 @@ void ServiceNode::bootstrap_data() {
     fields["storage_port"] = true;
     fields["public_ip"] = true;
     fields["height"] = true;
-    fields["target_height"] = true;
     fields["block_hash"] = true;
     fields["hardfork"] = true;
 
@@ -528,32 +529,23 @@ void ServiceNode::save_bulk(const std::vector<Item>& items) {
     reset_listeners();
 }
 
-void ServiceNode::on_sync_complete() {
-
-#ifndef INTEGRATION_TEST
-    bootstrap_data();
-#endif
-}
-
 void ServiceNode::on_bootstrap_update(const block_update_t& bu) {
 
-    swarm_->bootstrap_state(bu.swarms);
+    swarm_->apply_swarm_changes(bu.swarms);
+    target_height_ = std::max(target_height_, bu.height);
 }
 
 void ServiceNode::on_swarm_update(const block_update_t& bu) {
 
     hardfork_ = bu.hardfork;
 
-    bool sync_complete = false;
-
-    if (syncing_ && bu.target_height != 0) {
-        syncing_ = bu.height < bu.target_height - 1;
-        sync_complete = !syncing_;
+    if (syncing_ && target_height_ != 0) {
+        syncing_ = bu.height < target_height_;
     }
 
     /// We don't have anything to do until we have synced
     if (syncing_) {
-        LOKI_LOG(debug, "Still syncing: {}/{}", bu.height, bu.target_height);
+        LOKI_LOG(debug, "Still syncing: {}/{}", bu.height, target_height_);
         return;
     }
 
@@ -583,11 +575,6 @@ void ServiceNode::on_swarm_update(const block_update_t& bu) {
         return;
     }
 
-    if (!swarm_) {
-        LOKI_LOG(info, "Initialized our swarm");
-        swarm_ = std::make_unique<Swarm>(our_address_);
-    }
-
     const SwarmEvents events = swarm_->derive_swarm_events(bu.swarms);
 
     swarm_->set_swarm_id(events.our_swarm_id);
@@ -598,10 +585,6 @@ void ServiceNode::on_swarm_update(const block_update_t& bu) {
     }
 
     swarm_->update_state(bu.swarms, events);
-
-    if (sync_complete) {
-        on_sync_complete();
-    }
 
     if (!events.new_snodes.empty()) {
         bootstrap_peers(events.new_snodes);
@@ -641,7 +624,6 @@ void ServiceNode::swarm_timer_tick() {
     fields["storage_port"] = true;
     fields["public_ip"] = true;
     fields["height"] = true;
-    fields["target_height"] = true;
     fields["block_hash"] = true;
     fields["hardfork"] = true;
 
@@ -791,18 +773,19 @@ void ServiceNode::send_storage_test_req(const sn_record_t& testee,
 
     auto callback = [testee, item, height = this->block_height_,
                      this](sn_response_t&& res) {
-        bool success = false;
+        ResultType result = ResultType::OTHER;
 
         if (res.error_code == SNodeError::NO_ERROR && res.body) {
             if (*res.body == item.data) {
                 LOKI_LOG(debug,
                          "Storage test is successful for: {} at height: {}",
                          testee, height);
-                success = true;
+                result = ResultType::OK;
             } else {
 
                 LOKI_LOG(warn, "Test answer doesn't match for: {} at height {}",
                          testee, height);
+                result = ResultType::MISMATCH;
 
 #ifdef INTEGRATION_TEST
                 LOKI_LOG(warn, "got: {} expected: {}", *res.body, item.data);
@@ -819,7 +802,7 @@ void ServiceNode::send_storage_test_req(const sn_record_t& testee,
             // abort_if_integration_test();
         }
 
-        this->all_stats_.record_storage_test_result(testee, success);
+        this->all_stats_.record_storage_test_result(testee, result);
     };
 
     nlohmann::json json_body;
@@ -874,7 +857,7 @@ void ServiceNode::process_blockchain_test_response(
              "Processing blockchain test response from: {} at height: {}",
              testee, bc_height);
 
-    bool success = false;
+    ResultType result = ResultType::OTHER;
 
     if (res.error_code == SNodeError::NO_ERROR && res.body) {
 
@@ -884,9 +867,10 @@ void ServiceNode::process_blockchain_test_response(
             uint64_t their_height = body.at("res_height").get<uint64_t>();
 
             if (our_answer.res_height == their_height) {
-                success = true;
+                result = ResultType::OK;
                 LOKI_LOG(debug, "Success.");
             } else {
+                result = ResultType::MISMATCH;
                 LOKI_LOG(debug, "Failed: incorrect answer.");
             }
 
@@ -899,7 +883,7 @@ void ServiceNode::process_blockchain_test_response(
                  testee);
     }
 
-    this->all_stats_.record_blockchain_test_result(testee, success);
+    this->all_stats_.record_blockchain_test_result(testee, result);
 }
 
 // Deterministically selects two random swarm members; returns true on success
