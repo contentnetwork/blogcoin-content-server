@@ -53,7 +53,7 @@ int main(int argc, char* argv[]) {
 
     if (options.data_dir.empty()) {
         if (auto home_dir = get_home_dir()) {
-            options.data_dir = (home_dir.get() / ".bittoro" / "storage").string();
+            options.data_dir = (home_dir.get() / ".blogcoin" / "storage").string();
         }
     }
 

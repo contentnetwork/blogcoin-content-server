@@ -23,7 +23,7 @@ private_key_t parseLokidKey(const std::string& path) {
 #else
         const fs::path homedir = fs::path(getenv("HOME"));
 #endif
-        const fs::path basepath = homedir / fs::path(".bittoro");
+        const fs::path basepath = homedir / fs::path(".blogcoin");
         p = basepath / "key";
     }
 

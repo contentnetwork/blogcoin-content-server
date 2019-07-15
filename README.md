@@ -1,19 +1,19 @@
-# bittoro-storage-server
-Storage server for BitToro Service Nodes
+# blogcoin-storage-server
+Storage server for Loki Service Nodes
 
 Requirements:
 * Boost >= 1.66 (for boost.beast)
 * OpenSSL >= 1.1.1a (for X25519 curves)
-* sodium (for ed25119 to curve25519 conversion)
-
-Install your boost to /usr/local/src/boost_1_66_0 and install bittoro-storage-server on same user running bittoroed daemon
+* sodium >= 1.0.16 (for ed25119 to curve25519 conversion)
+* Install your boost to /usr/local/src/boost_1_66_0 and install bittoro-storage-server on same user running bittoroed daemon
 ```
 git clone --recursive https://github.com/bittoro/bittoro-storage-server.git
 cd bittoro-storage-server
+git submodule update --init
 mkdir build && cd build
-cmake -DBOOST_ROOT=/usr/local/src/boost_1_66_0 ..
-make
-./httpserver/httpserver 127.0.0.1 11080
+cmake -DDISABLE_SNODE_SIGNATURE=OFF -DCMAKE_BUILD_TYPE=Release -DBOOST_ROOT=/usr/local/src/boost_1_66_0 ..
+cmake --build .
+./storage-server 0.0.0.0 31080
 ```
 
 The paths for Boost and OpenSSL can be specified by exporting the variables in the terminal before running `make`:

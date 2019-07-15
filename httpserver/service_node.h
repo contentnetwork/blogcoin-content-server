@@ -20,7 +20,7 @@
 #include "swarm.h"
 
 static constexpr size_t BLOCK_HASH_CACHE_SIZE = 20;
-static constexpr char POW_DIFFICULTY_URL[] = "sentinel.messenger.bittoro.network";
+static constexpr char POW_DIFFICULTY_URL[] = "sentinel.messenger.theblogcoin.xyz";
 static constexpr int STORAGE_SERVER_HARDFORK = 12;
 
 class Database;
@@ -211,7 +211,7 @@ class ServiceNode {
     mutable all_stats_t all_stats_;
 
     // Return true if the service node is ready to start running
-    bool snode_ready();
+    bool snode_ready(boost::optional<std::string&> reason);
 
     // Register a connection as waiting for new data for pk
     void register_listener(const std::string& pk,

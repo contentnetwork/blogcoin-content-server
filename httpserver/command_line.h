@@ -7,7 +7,7 @@ namespace loki {
 
 struct command_line_options {
     uint16_t port;
-    uint16_t lokid_rpc_port = 11045;
+    uint16_t lokid_rpc_port = 19293;
     bool force_start = false;
     bool print_version = false;
     bool print_help = false;
