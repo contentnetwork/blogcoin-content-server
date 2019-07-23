@@ -1,19 +1,19 @@
-# blogcoin-storage-server
-Storage server for Loki Service Nodes
+# blogcoin-content-server
+Content server for BlogCoin Master Nodes
 
 Requirements:
 * Boost >= 1.66 (for boost.beast)
 * OpenSSL >= 1.1.1a (for X25519 curves)
 * sodium >= 1.0.16 (for ed25119 to curve25519 conversion)
-* Install your boost to /usr/local/src/boost_1_66_0 and install storage-server on same user running blogcoind daemon
+* Install data-server on same user running blogcoind daemon
 ```
-git clone --recursive https://github.com/contentnetwork/blogcoin-storage-server.git
-cd blogcoin-storage-server
+git clone --recursive https://github.com/contentnetwork/blogcoin-content-server.git
+cd blogcoin-content-server
 git submodule update --init
 mkdir build && cd build
-cmake -DDISABLE_SNODE_SIGNATURE=OFF -DCMAKE_BUILD_TYPE=Release -DBOOST_ROOT=/usr/local/src/boost_1_66_0 ..
+cmake -DDISABLE_SNODE_SIGNATURE=OFF -DCMAKE_BUILD_TYPE=Release ..
 cmake --build .
-./storage-server 0.0.0.0 31080
+./data-server 0.0.0.0 38123
 ```
 
 The paths for Boost and OpenSSL can be specified by exporting the variables in the terminal before running `make`:

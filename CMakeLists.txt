@@ -8,7 +8,7 @@ function(LOKI_ADD_SUBDIRECTORY SRC)
     add_subdirectory(${SRC} ${ARGN})
 endfunction()
 
-project(storage_server)
+project(data_server)
 
 option(INTEGRATION_TEST "build for integration test" OFF)
 option(DISABLE_SNODE_SIGNATURE "Generate and verify signatures for inter-snode communication"
