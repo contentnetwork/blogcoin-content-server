@@ -690,7 +690,7 @@ void ServiceNode::lokid_ping_timer_tick() {
         if (res.error_code == SNodeError::NO_ERROR) {
 
             if (!res.body) {
-                LOKI_LOG(critical, "Empty body on Lokid ping");
+                LOKI_LOG(critical, "Empty body on bittorod ping");
                 return;
             }
 
@@ -702,11 +702,11 @@ void ServiceNode::lokid_ping_timer_tick() {
                     LOKI_LOG(info, "Successfully pinged bittorod");
                 } else {
                     LOKI_LOG(critical,
-                             "Could not ping Lokid: status is NOT OK");
+                             "Could not ping bittorod: status is NOT OK");
                 }
             } catch (...) {
                 LOKI_LOG(critical,
-                         "Could not ping Lokid: bad json in response");
+                         "Could not ping bittorod: bad json in response");
             }
 
         } else {
