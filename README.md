@@ -1,6 +1,8 @@
 # blogcoin-content-server
 Content server for BlogCoin Master Nodes
 
+Notice : Content Server does not work with restricted-rpc daemon
+
 Requirements:
 * Boost >= 1.66 (for boost.beast)
 * OpenSSL >= 1.1.1a (for X25519 curves)
