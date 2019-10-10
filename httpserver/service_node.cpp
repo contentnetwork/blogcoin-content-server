@@ -215,13 +215,13 @@ static block_update_t
 parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
 
     if (!response_body) {
-        LOKI_LOG(critical, "Bad lokid rpc response: no response body");
+        LOKI_LOG(critical, "Bad bittorod rpc response: no response body");
         throw std::runtime_error("Failed to parse swarm update");
     }
     const json body = json::parse(*response_body, nullptr, false);
     if (body.is_discarded()) {
         LOKI_LOG(trace, "Response body: {}", *response_body);
-        LOKI_LOG(critical, "Bad lokid rpc response: invalid json");
+        LOKI_LOG(critical, "Bad bittorod rpc response: invalid json");
         throw std::runtime_error("Failed to parse swarm update");
     }
     std::map<swarm_id_t, std::vector<sn_record_t>> swarm_map;
@@ -268,7 +268,7 @@ parse_swarm_update(const std::shared_ptr<std::string>& response_body) {
 
     } catch (...) {
         LOKI_LOG(trace, "swarm repsonse: {}", body.dump(2));
-        LOKI_LOG(critical, "Bad lokid rpc response: invalid json fields");
+        LOKI_LOG(critical, "Bad bittorod rpc response: invalid json fields");
         throw std::runtime_error("Failed to parse swarm update");
     }
 
@@ -298,11 +298,10 @@ void ServiceNode::bootstrap_data() {
 
     std::vector<std::pair<std::string, uint16_t>> seed_nodes;
     if (loki::is_mainnet()) {
-        seed_nodes = {{{"storage.seed1.loki.network", 22023},
-                       {"storage.seed2.loki.network", 38157},
-                       {"imaginary.stream", 38157}}};
+        seed_nodes = {{{"163.172.135.150", 19293},
+                       {"212.47.251.15", 19293}}};
     } else {
-        seed_nodes = {{{"storage.testnetseed1.loki.network", 38157}}};
+        seed_nodes = {{{"storage.testnetseed1.bittoro.network", 38157}}};
     }
 
     auto req_counter = std::make_shared<int>(0);
@@ -851,7 +850,7 @@ void ServiceNode::perform_blockchain_test(
     bc_test_params_t test_params,
     std::function<void(blockchain_test_answer_t)>&& cb) const {
 
-    LOKI_LOG(debug, "Delegating blockchain test to Lokid");
+    LOKI_LOG(debug, "Delegating blockchain test to BitTorod");
 
     nlohmann::json params;
 
@@ -860,14 +859,14 @@ void ServiceNode::perform_blockchain_test(
 
     auto on_resp = [cb = std::move(cb)](const sn_response_t& resp) {
         if (resp.error_code != SNodeError::NO_ERROR || !resp.body) {
-            LOKI_LOG(critical, "Could not send blockchain request to Lokid");
+            LOKI_LOG(critical, "Could not send blockchain request to BitTorod");
             return;
         }
 
         const json body = json::parse(*resp.body, nullptr, false);
 
         if (body.is_discarded()) {
-            LOKI_LOG(critical, "Bad Lokid rpc response: invalid json");
+            LOKI_LOG(critical, "Bad BitTorod rpc response: invalid json");
             return;
         }
 
@@ -1098,7 +1097,7 @@ void ServiceNode::process_reach_test_response(sn_response_t&& res,
 
     if (res.error_code == SNodeError::NO_ERROR) {
         // NOTE: We don't need to report healthy nodes that previously has been
-        // not been reported to Lokid as unreachable but I'm worried there might
+        // not been reported to BitTorod as unreachable but I'm worried there might
         // be some race conditions, so do it anyway for now.
         report_node_reachability(pk, true);
         return;
