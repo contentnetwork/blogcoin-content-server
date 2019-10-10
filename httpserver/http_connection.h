@@ -70,11 +70,11 @@ class LokidClient {
     void make_lokid_request(boost::string_view method,
                             const nlohmann::json& params,
                             http_callback_t&& cb) const;
-    void make_lokid_request(const std::string& daemon_ip,
-                            const uint16_t daemon_port,
-                            boost::string_view method,
-                            const nlohmann::json& params,
-                            http_callback_t&& cb) const;
+    void make_custom_lokid_request(const std::string& daemon_ip,
+                                   const uint16_t daemon_port,
+                                   boost::string_view method,
+                                   const nlohmann::json& params,
+                                   http_callback_t&& cb) const;
 };
 
 constexpr auto SESSION_TIME_LIMIT = std::chrono::seconds(30);
@@ -104,6 +104,7 @@ class HttpClientSession
     response_t res_;
 
     bool used_callback_ = false;
+    bool needs_cleanup = true;
 
     void on_connect();
 
@@ -113,6 +114,8 @@ class HttpClientSession
 
     void trigger_callback(SNodeError error,
                           std::shared_ptr<std::string>&& body);
+
+    void clean_up();
 
   public:
     // Resolver and socket require an io_context
@@ -255,12 +258,16 @@ class connection_t : public std::enable_shared_from_this<connection_t> {
                                   const std::string& tester_addr,
                                   const std::string& msg_hash);
 
+    void process_blockchain_test_req(uint64_t height,
+                                     const std::string& tester_pk,
+                                     bc_test_params_t params);
+
     bool parse_header(const char* key);
 
     template <typename... Args>
     bool parse_header(const char* first, Args... args);
 
-    void handle_wrong_swarm(const std::string& pubKey);
+    void handle_wrong_swarm(const user_pubkey_t& pubKey);
 
     bool validate_snode_request();
     bool verify_signature(const std::string& signature,
@@ -275,3 +282,33 @@ void run(boost::asio::io_context& ioc, const std::string& ip, uint16_t port,
 } // namespace http_server
 
 } // namespace loki
+
+namespace fmt {
+
+template <>
+struct formatter<loki::SNodeError> {
+
+    template <typename ParseContext>
+    constexpr auto parse(ParseContext& ctx) {
+        return ctx.begin();
+    }
+
+    template <typename FormatContext>
+    auto format(const loki::SNodeError& err, FormatContext& ctx) {
+
+        switch (err) {
+        case loki::SNodeError::NO_ERROR:
+            return format_to(ctx.out(), "NO_ERROR");
+        case loki::SNodeError::ERROR_OTHER:
+            return format_to(ctx.out(), "ERROR_OTHER");
+        case loki::SNodeError::NO_REACH:
+            return format_to(ctx.out(), "NO_REACH");
+        case loki::SNodeError::HTTP_ERROR:
+            return format_to(ctx.out(), "HTTP_ERROR");
+        default:
+            return format_to(ctx.out(), "[UNKNOWN]");
+        }
+    }
+};
+
+} // namespace fmt

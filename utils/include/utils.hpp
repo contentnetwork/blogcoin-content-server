@@ -106,9 +106,16 @@ bool base32z_decode(const Stack& stack, V& value) {
     return true;
 }
 
-std::string hex64_to_base32z(const std::string& src);
+std::string hex_to_base32z(const std::string& src);
 
+/// Returns a random number from [0, n) using a static generator
+uint64_t uniform_distribution_portable(uint64_t n);
+
+/// Returns a random number from [0, n); (copied from lokid)
 uint64_t uniform_distribution_portable(std::mt19937_64& mersenne_twister,
                                        uint64_t n);
+
+/// Return the open file limit (-1 on failure)
+int get_fd_limit();
 
 } // namespace util

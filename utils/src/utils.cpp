@@ -2,6 +2,10 @@
 
 #include <chrono>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 namespace util {
 
 uint64_t get_time_ms() {
@@ -23,7 +27,7 @@ constexpr uint8_t hexpair_to_byte(const char& hi, const char& lo) {
     return hex_to_nibble(hi) << 4 | hex_to_nibble(lo);
 }
 
-std::string hex64_to_base32z(const std::string& src) {
+std::string hex_to_base32z(const std::string& src) {
     // decode to binary
     std::vector<uint8_t> bin;
     // odd sized is invalid
@@ -96,7 +100,12 @@ bool parseTTL(const std::string& ttlString, uint64_t& ttl) {
     return true;
 }
 
-/// Returns a random number from [0, n); (copied from lokid)
+uint64_t uniform_distribution_portable(uint64_t n) {
+
+    static thread_local std::mt19937_64 generator;
+    return uniform_distribution_portable(generator, n);
+}
+
 uint64_t uniform_distribution_portable(std::mt19937_64& mersenne_twister,
                                        uint64_t n) {
     const uint64_t secure_max =
@@ -106,6 +115,15 @@ uint64_t uniform_distribution_portable(std::mt19937_64& mersenne_twister,
         x = mersenne_twister();
     while (x >= secure_max);
     return x / (secure_max / n);
+}
+
+int get_fd_limit() {
+
+#ifdef _WIN32
+    return -1;
+#endif
+
+    return sysconf(_SC_OPEN_MAX);
 }
 
 } // namespace util

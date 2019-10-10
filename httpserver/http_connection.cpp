@@ -3,6 +3,7 @@
 #include "Item.hpp"
 #include "channel_encryption.hpp"
 #include "dev_sink.h"
+#include "net_stats.h"
 #include "rate_limiter.h"
 #include "security.h"
 #include "serialization.h"
@@ -10,7 +11,6 @@
 #include "service_node.h"
 #include "signature.h"
 #include "utils.hpp"
-#include "net_stats.h"
 
 #include <cstdlib>
 #include <ctime>
@@ -105,15 +105,15 @@ void LokidClient::make_lokid_request(boost::string_view method,
                                      const nlohmann::json& params,
                                      http_callback_t&& cb) const {
 
-    make_lokid_request(local_ip_, lokid_rpc_port_, method, params,
-                       std::move(cb));
+    make_custom_lokid_request(local_ip_, lokid_rpc_port_, method, params,
+                              std::move(cb));
 }
 
-void LokidClient::make_lokid_request(const std::string& daemon_ip,
-                                     const uint16_t daemon_port,
-                                     boost::string_view method,
-                                     const nlohmann::json& params,
-                                     http_callback_t&& cb) const {
+void LokidClient::make_custom_lokid_request(const std::string& daemon_ip,
+                                            const uint16_t daemon_port,
+                                            boost::string_view method,
+                                            const nlohmann::json& params,
+                                            http_callback_t&& cb) const {
 
     auto req = std::make_shared<request_t>();
 
@@ -242,8 +242,12 @@ void connection_t::do_handshake() {
 }
 
 void connection_t::on_handshake(boost::system::error_code ec) {
+
+    const auto sockfd = stream_.lowest_layer().native_handle();
+    LOKI_LOG(debug, "Open https socket: {}", sockfd);
+    get_net_stats().record_socket_open(sockfd);
     if (ec) {
-        LOKI_LOG(warn, "ssl handshake failed: {}", ec.message());
+        LOKI_LOG(warn, "ssl handshake failed: ec: {} ({})", ec.value(), ec.message());
         deadline_.cancel();
         return;
     }
@@ -342,15 +346,20 @@ bool connection_t::verify_signature(const std::string& signature,
 }
 
 void connection_t::process_storage_test_req(uint64_t height,
-                                            const std::string& tester_addr,
+                                            const std::string& tester_pk,
                                             const std::string& msg_hash) {
 
     LOKI_LOG(trace, "Performing storage test, attempt: {}", repetition_count_);
 
     std::string answer;
 
+    /// TODO: we never actually test that `height` is within any reasonable
+    /// time window (or that it is not repeated multiple times), we should do that!
+    /// This is done implicitly to some degree using `block_hashes_cache_`, which
+    /// holds a limited number of recent blocks only and fails if an earlier block
+    /// is requested
     const MessageTestStatus status = service_node_.process_storage_test_req(
-        height, tester_addr, msg_hash, answer);
+        height, tester_pk, msg_hash, answer);
     const auto elapsed_time =
         std::chrono::steady_clock::now() - start_timestamp_;
     if (status == MessageTestStatus::SUCCESS) {
@@ -360,7 +369,13 @@ void connection_t::process_storage_test_req(uint64_t height,
             std::chrono::duration_cast<std::chrono::milliseconds>(elapsed_time)
                 .count());
         delay_response_ = true;
-        body_stream_ << answer;
+
+        nlohmann::json json_res;
+        json_res["status"] = "OK";
+        json_res["value"] = answer;
+
+        this->body_stream_ << json_res.dump();
+
         response_.result(http::status::ok);
         this->write_response();
     } else if (status == MessageTestStatus::RETRY && elapsed_time < 1min) {
@@ -369,7 +384,7 @@ void connection_t::process_storage_test_req(uint64_t height,
 
         repeat_timer_.expires_after(TEST_RETRY_PERIOD);
         repeat_timer_.async_wait([self = shared_from_this(), height, msg_hash,
-                                  tester_addr](const error_code& ec) {
+                                  tester_pk](const error_code& ec) {
             if (ec) {
                 if (ec != boost::asio::error::operation_aborted) {
                     LOKI_LOG(error,
@@ -377,22 +392,53 @@ void connection_t::process_storage_test_req(uint64_t height,
                              ec.value(), ec.message());
                 }
             } else {
-                self->process_storage_test_req(height, tester_addr, msg_hash);
+                self->process_storage_test_req(height, tester_pk, msg_hash);
             }
         });
 
+    } else if (status == MessageTestStatus::WRONG_REQ) {
+        nlohmann::json json_res;
+        json_res["status"] = "wrong request";
+        this->body_stream_ << json_res.dump();
+        response_.result(http::status::ok);
     } else {
         LOKI_LOG(error, "Failed storage test, tried {} times.",
                  repetition_count_);
-        response_.result(http::status::bad_request);
-        /// TODO: send a helpful error message
+        nlohmann::json json_res;
+        json_res["status"] = "other";
+        this->body_stream_ << json_res.dump();
+        response_.result(http::status::ok);
     }
+}
+
+void connection_t::process_blockchain_test_req(uint64_t,
+                                               const std::string& tester_pk,
+                                               bc_test_params_t params) {
+
+    // Note: `height` can be 0, which is the default value for old SS, allowed
+    // pre HF13
+
+    LOKI_LOG(debug, "Performing blockchain test");
+
+    auto callback = [this](blockchain_test_answer_t answer) {
+        this->response_.result(http::status::ok);
+
+        nlohmann::json json_res;
+        json_res["res_height"] = answer.res_height;
+
+        this->body_stream_ << json_res.dump();
+        this->write_response();
+    };
+
+    /// TODO: this should first check if tester/testee are correct! (use `height`)
+    service_node_.perform_blockchain_test(params, std::move(callback));
 }
 
 void connection_t::process_swarm_req(boost::string_view target) {
 
 #ifndef DISABLE_SNODE_SIGNATURE
-    if (!validate_snode_request()) {
+    // allow ping request as a quick workaround (and they are cheap)
+    if (!validate_snode_request() && (target != "/swarms/ping_test/v1")) {
         return;
     }
 #endif
@@ -405,6 +451,9 @@ void connection_t::process_swarm_req(boost::string_view target) {
         service_node_.process_push_batch(request_.body());
 
     } else if (target == "/swarms/storage_test/v1") {
+
+        /// Set to "bad request" by default
+        response_.result(http::status::bad_request);
         LOKI_LOG(debug, "Got storage test request");
 
         using nlohmann::json;
@@ -425,7 +474,8 @@ void connection_t::process_swarm_req(boost::string_view target) {
             blk_height = body.at("height").get<uint64_t>();
             msg_hash = body.at("hash").get<std::string>();
         } catch (...) {
-            this->body_stream_ << "Bad snode test request: missing fields in json";
+            this->body_stream_
+                << "Bad snode test request: missing fields in json";
             response_.result(http::status::bad_request);
             LOKI_LOG(debug, "Bad snode test request: missing fields in json");
             return;
@@ -433,8 +483,7 @@ void connection_t::process_swarm_req(boost::string_view target) {
 
         const auto it = header_.find(LOKI_SENDER_SNODE_PUBKEY_HEADER);
         if (it != header_.end()) {
-            std::string& tester_pk = it->second;
-            tester_pk.append(".snode");
+            const std::string& tester_pk = it->second;
             this->process_storage_test_req(blk_height, tester_pk, msg_hash);
         } else {
             LOKI_LOG(debug, "Ignoring test request, no pubkey present");
@@ -454,28 +503,37 @@ void connection_t::process_swarm_req(boost::string_view target) {
 
         bc_test_params_t params;
 
+        // Height that should be used to check derive tester/testee
+        uint64_t height = 0;
+
         try {
             params.max_height = body.at("max_height").get<uint64_t>();
             params.seed = body.at("seed").get<uint64_t>();
+
+            if (body.find("height") != body.end()) {
+                height = body.at("height").get<uint64_t>();
+            } else {
+                LOKI_LOG(debug, "No tester height, defaulting to {}", height);
+            }
         } catch (...) {
             response_.result(http::status::bad_request);
             LOKI_LOG(debug, "Bad snode test request: missing fields in json");
             return;
         }
 
-        delay_response_ = true;
+        /// TODO: only check pubkey field once (in validate snode req)
+        const auto it = header_.find(LOKI_SENDER_SNODE_PUBKEY_HEADER);
+        if (it != header_.end()) {
+            const std::string& tester_pk = it->second;
+            delay_response_ = true;
+            this->process_blockchain_test_req(height, tester_pk, params);
+        } else {
+            LOKI_LOG(debug, "Ignoring test request, no pubkey present");
+        }
 
-        auto callback = [this](blockchain_test_answer_t answer) {
-            this->response_.result(http::status::ok);
-
-            nlohmann::json json_res;
-            json_res["res_height"] = answer.res_height;
-
-            this->body_stream_ << json_res.dump();
-            this->write_response();
-        };
-
-        service_node_.perform_blockchain_test(params, callback);
+    } else if (target == "/swarms/ping_test/v1") {
+        LOKI_LOG(debug, "Received ping_test");
+        response_.result(http::status::ok);
     } else if (target == "/swarms/push/v1") {
 
         LOKI_LOG(trace, "swarms/push");
@@ -508,6 +566,12 @@ void connection_t::process_request() {
     switch (request_.method()) {
     case http::verb::post: {
         std::string reason;
+
+        // Respond to ping even if we are not ready
+        if (target == "/swarms/ping_test/v1") {
+            this->process_swarm_req(target);
+            break;
+        }
         if (!service_node_.snode_ready(reason)) {
             LOKI_LOG(debug,
                      "Ignoring post request; storage server not ready: {}",
@@ -524,9 +588,13 @@ void connection_t::process_request() {
             try {
                 process_client_req();
             } catch (std::exception& e) {
-                this->body_stream_ << fmt::format("Exception caught while processing client request: {}", e.what());
+                this->body_stream_ << fmt::format(
+                    "Exception caught while processing client request: {}",
+                    e.what());
                 response_.result(http::status::internal_server_error);
-                LOKI_LOG(critical, "Exception caught while processing client request: {}", e.what());
+                LOKI_LOG(critical,
+                         "Exception caught while processing client request: {}",
+                         e.what());
             }
 
             // TODO: parse target (once) to determine if it is a "swarms" call
@@ -553,11 +621,18 @@ void connection_t::process_request() {
             response_.result(http::status::ok);
             write_response();
             ioc_.stop();
+        } else if (target == "/sleep") {
+            ioc_.post([]() {
+                LOKI_LOG(warn, "Sleeping for some time...");
+                std::this_thread::sleep_for(std::chrono::seconds(30));
+            });
+            response_.result(http::status::ok);
         }
 #endif
         else {
             LOKI_LOG(debug, "unknown target for POST: {}", target.to_string());
-            this->body_stream_ << fmt::format("unknown target for POST: {}", target.to_string());
+            this->body_stream_ << fmt::format("unknown target for POST: {}",
+                                              target.to_string());
             response_.result(http::status::not_found);
         }
         break;
@@ -569,7 +644,8 @@ void connection_t::process_request() {
         } else if (target == "/get_logs/v1") {
             this->on_get_logs();
         } else {
-            this->body_stream_ << fmt::format("unknown target for GET: {}", target.to_string());
+            this->body_stream_ << fmt::format("unknown target for GET: {}",
+                                              target.to_string());
             LOKI_LOG(debug, "unknown target for GET: {}", target.to_string());
             response_.result(http::status::not_found);
         }
@@ -680,16 +756,20 @@ void connection_t::process_store(const json& params) {
         }
     }
 
-    const auto pubKey = params["pubKey"].get<std::string>();
     const auto ttl = params["ttl"].get<std::string>();
     const auto nonce = params["nonce"].get<std::string>();
     const auto timestamp = params["timestamp"].get<std::string>();
     const auto data = params["data"].get<std::string>();
 
-    if (pubKey.size() != 66) {
+    bool created;
+    auto pk =
+        user_pubkey_t::create(params["pubKey"].get<std::string>(), created);
+
+    if (!created) {
         response_.result(http::status::bad_request);
-        body_stream_ << "Pubkey must be 66 characters long\n";
-        LOKI_LOG(debug, "Pubkey must be 66 characters long");
+        body_stream_ << fmt::format("Pubkey must be {} characters long\n",
+                                    get_user_pubkey_size());
+        LOKI_LOG(error, "Pubkey must be {} characters long", get_user_pubkey_size());
         return;
     }
 
@@ -701,8 +781,8 @@ void connection_t::process_store(const json& params) {
         return;
     }
 
-    if (!service_node_.is_pubkey_for_us(pubKey)) {
-        handle_wrong_swarm(pubKey);
+    if (!service_node_.is_pubkey_for_us(pk)) {
+        handle_wrong_swarm(pk);
         return;
     }
 
@@ -731,7 +811,7 @@ void connection_t::process_store(const json& params) {
     std::string messageHash;
 
     const bool valid_pow =
-        checkPoW(nonce, timestamp, ttl, pubKey, data, messageHash,
+        checkPoW(nonce, timestamp, ttl, pk.str(), data, messageHash,
                  service_node_.get_curr_pow_difficulty());
 #ifndef DISABLE_POW
     if (!valid_pow) {
@@ -752,7 +832,7 @@ void connection_t::process_store(const json& params) {
 
     try {
         const auto msg =
-            message_t{pubKey, data, messageHash, ttlInt, timestampInt, nonce};
+            message_t{pk.str(), data, messageHash, ttlInt, timestampInt, nonce};
         success = service_node_.process_store(msg);
     } catch (std::exception e) {
         response_.result(http::status::internal_server_error);
@@ -760,7 +840,7 @@ void connection_t::process_store(const json& params) {
         body_stream_ << e.what() << "\n";
         LOKI_LOG(critical,
                  "Internal Server Error. Could not store message for {}",
-                 obfuscate_pubkey(pubKey));
+                 obfuscate_pubkey(pk.str()));
         return;
     }
 
@@ -779,7 +859,7 @@ void connection_t::process_store(const json& params) {
     res_body["difficulty"] = service_node_.get_curr_pow_difficulty();
     body_stream_ << res_body.dump();
     LOKI_LOG(trace, "Successfully stored message for {}",
-             obfuscate_pubkey(pubKey));
+             obfuscate_pubkey(pk.str()));
 }
 
 void connection_t::process_snodes_by_pk(const json& params) {
@@ -791,17 +871,18 @@ void connection_t::process_snodes_by_pk(const json& params) {
         return;
     }
 
-    auto pubKey = params["pubKey"].get<std::string>();
-
-    if (pubKey.size() != 66) {
+    bool success;
+    const auto pk =
+        user_pubkey_t::create(params["pubKey"].get<std::string>(), success);
+    if (!success) {
         response_.result(http::status::bad_request);
-        body_stream_ << "Pubkey must be 66 characters long\n";
-        LOKI_LOG(debug, "Pubkey must be 66 characters long ");
+        body_stream_ << fmt::format("Pubkey must be {} characters long\n",
+                                    get_user_pubkey_size());
+        LOKI_LOG(debug, "Pubkey must be {} characters long ", get_user_pubkey_size());
         return;
     }
 
-    const std::vector<sn_record_t> nodes =
-        service_node_.get_snodes_by_pk(pubKey);
+    const std::vector<sn_record_t> nodes = service_node_.get_snodes_by_pk(pk);
     const json res_body = snodes_to_json(nodes);
 
     response_.result(http::status::ok);
@@ -839,7 +920,7 @@ void connection_t::process_retrieve_all() {
     response_.result(http::status::ok);
 }
 
-void connection_t::handle_wrong_swarm(const std::string& pubKey) {
+void connection_t::handle_wrong_swarm(const user_pubkey_t& pubKey) {
 
     const std::vector<sn_record_t> nodes =
         service_node_.get_snodes_by_pk(pubKey);
@@ -954,19 +1035,30 @@ void connection_t::process_retrieve(const json& params) {
         }
     }
 
-    const auto pub_key = params["pubKey"].get<std::string>();
-    const auto last_hash = params["lastHash"].get<std::string>();
+    bool success;
+    const auto pk =
+        user_pubkey_t::create(params["pubKey"].get<std::string>(), success);
 
-    if (!service_node_.is_pubkey_for_us(pub_key)) {
-        handle_wrong_swarm(pub_key);
+    if (!success) {
+        response_.result(http::status::bad_request);
+        body_stream_ << fmt::format("Pubkey must be {} characters long\n",
+                                    get_user_pubkey_size());
+        LOKI_LOG(debug, "Pubkey must be {} characters long ", get_user_pubkey_size());
         return;
     }
+
+    if (!service_node_.is_pubkey_for_us(pk)) {
+        handle_wrong_swarm(pk);
+        return;
+    }
+
+    const auto last_hash = params["lastHash"].get<std::string>();
 
     // we are going to send the response anynchronously
     // once we have new data
     delay_response_ = true;
 
-    poll_db(pub_key, last_hash);
+    poll_db(pk.str(), last_hash);
 }
 
 void connection_t::process_client_req() {
@@ -1084,10 +1176,14 @@ void connection_t::on_shutdown(boost::system::error_code ec) {
         // http://stackoverflow.com/questions/25587403/boost-asio-ssl-async-shutdown-always-finishes-with-an-error
         ec.assign(0, ec.category());
     }
-    if (ec)
+    if (ec) {
         LOKI_LOG(error, "Could not close ssl stream gracefully, ec: {}",
                  ec.message());
+    }
 
+    const auto sockfd = stream_.lowest_layer().native_handle();
+    LOKI_LOG(debug, "Close https socket: {}", sockfd);
+    get_net_stats().record_socket_close(sockfd);
     stream_.lowest_layer().close();
 }
 
@@ -1139,12 +1235,14 @@ HttpClientSession::HttpClientSession(boost::asio::io_context& ioc,
                                      http_callback_t&& cb)
     : ioc_(ioc), socket_(ioc), endpoint_(ep), callback_(cb),
       deadline_timer_(ioc), req_(req) {
-          get_net_stats().http_connections_out++;
-      }
+    get_net_stats().http_connections_out++;
+}
 
 void HttpClientSession::on_connect() {
 
-    LOKI_LOG(trace, "on connect");
+    const auto sockfd = socket_.native_handle();
+    LOKI_LOG(debug, "Open http socket: {}", sockfd);
+    get_net_stats().record_socket_open(sockfd);
     http::async_write(socket_, *req_,
                       std::bind(&HttpClientSession::on_write,
                                 shared_from_this(), std::placeholders::_1,
@@ -1203,11 +1301,21 @@ void HttpClientSession::start() {
         if (ec) {
             // We should make sure that we print the error a few levels above,
             // where we have more context
-            LOKI_LOG(
-                debug,
-                "[http client]: could not connect to {}:{}, message: {} ({})",
-                endpoint_.address().to_string(), endpoint_.port(), ec.message(),
-                ec.value());
+
+            if (ec == boost::system::errc::connection_refused) {
+                LOKI_LOG(debug,
+                         "[http client]: could not connect to {}:{}, message: "
+                         "{} ({})",
+                         endpoint_.address().to_string(), endpoint_.port(),
+                         ec.message(), ec.value());
+            } else {
+                LOKI_LOG(error,
+                         "[http client]: could not connect to {}:{}, message: "
+                         "{} ({})",
+                         endpoint_.address().to_string(), endpoint_.port(),
+                         ec.message(), ec.value());
+            }
+
             trigger_callback(SNodeError::NO_REACH, nullptr);
             return;
         }
@@ -1227,7 +1335,7 @@ void HttpClientSession::start() {
                 }
             } else {
                 LOKI_LOG(warn, "client socket timed out");
-                self->socket_.close();
+                self->clean_up();
             }
         });
 }
@@ -1240,18 +1348,20 @@ void HttpClientSession::trigger_callback(SNodeError error,
     deadline_timer_.cancel();
 }
 
-/// We execute callback (if haven't already) here to make sure it is called
-HttpClientSession::~HttpClientSession() {
+void HttpClientSession::clean_up() {
 
-    if (!used_callback_) {
-        // If we destroy the session before posting the callback,
-        // it must be due to some error
-        ioc_.post(std::bind(callback_,
-                            sn_response_t{SNodeError::ERROR_OTHER, nullptr}));
+    if (!needs_cleanup) {
+        // This can happen because the deadline timer
+        // triggered and cleaned up the connection already
+        LOKI_LOG(debug, "No need for cleanup");
+        return;
     }
 
+    needs_cleanup = false;
+
     if (!socket_.is_open()) {
-        LOKI_LOG(debug, "Socket is already closed");
+        /// This should never happen!
+        LOKI_LOG(critical, "Socket is already closed");
         return;
     }
 
@@ -1267,13 +1377,32 @@ HttpClientSession::~HttpClientSession() {
                  ec.message());
     }
 
+    const auto sockfd = socket_.native_handle();
     socket_.close(ec);
 
     if (ec) {
-        LOKI_LOG(error, "On close socket [{}: {}]", ec.value(), ec.message());
+        LOKI_LOG(error, "Closing socket {} failed [{}: {}]", sockfd, ec.value(), ec.message());
+    } else {
+        LOKI_LOG(debug, "Close http socket: {}", sockfd);
+        get_net_stats().record_socket_close(sockfd);
+    }
+}
+
+/// We execute callback (if haven't already) here to make sure it is called
+HttpClientSession::~HttpClientSession() {
+
+    if (!used_callback_) {
+        // If we destroy the session before posting the callback,
+        // it must be due to some error
+        ioc_.post(std::bind(callback_,
+                            sn_response_t{SNodeError::ERROR_OTHER, nullptr}));
     }
 
     get_net_stats().http_connections_out--;
+
+    this->clean_up();
+
+
 }
 
 } // namespace loki
