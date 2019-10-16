@@ -21,7 +21,7 @@ void command_line_parser::parse_args(int argc, char* argv[]) {
     // clang-format off
     desc_.add_options()
         ("bittorod-key", po::value(&options_.lokid_key_path), "Path to the Service Node key file")
-        ("data-dir", po::value(&options_.data_dir), "Path to persistent data (defaults to ~/.blogcoin/storage)")
+        ("data-dir", po::value(&options_.data_dir), "Path to persistent data (defaults to ~/.contentcoin/storage)")
         ("config-file", po::value(&config_file), "Path to custom config file (defaults to `storage-server.conf' inside --data-dir)")
         ("log-level", po::value(&options_.log_level), "Log verbosity level, see Log Levels below for accepted values")
         ("bittorod-rpc-port", po::value(&options_.lokid_rpc_port), "RPC port on which the local bittorod daemon is listening")

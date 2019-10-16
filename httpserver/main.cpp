@@ -57,9 +57,9 @@ int main(int argc, char* argv[]) {
     if (options.data_dir.empty()) {
         if (auto home_dir = get_home_dir()) {
             if (options.testnet) {
-                options.data_dir = (home_dir.get() / ".blogcoin" / "testnet" / "storage").string();
+                options.data_dir = (home_dir.get() / ".contentcoin" / "testnet" / "storage").string();
             } else {
-                options.data_dir = (home_dir.get() / ".blogcoin" / "storage").string();
+                options.data_dir = (home_dir.get() / ".contentcoin" / "storage").string();
             }
         }
     }
