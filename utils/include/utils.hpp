@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <array>
 
 namespace util {
 
@@ -34,6 +35,10 @@ static const std::unordered_map<char, uint8_t> zbase32_reverse_alpha = {
     {'q', 14}, {'x', 15}, {'o', 16}, {'t', 17}, {'1', 18}, {'u', 19}, {'w', 20},
     {'i', 21}, {'s', 22}, {'z', 23}, {'a', 24}, {'3', 25}, {'4', 26}, {'5', 27},
     {'h', 28}, {'7', 29}, {'6', 30}, {'9', 31}};
+
+std::string base64_decode(std::string const& data);
+
+std::string base64_encode(std::string const& s);
 
 /// adapted from i2pd
 template <typename Container, typename stack_t>
@@ -107,6 +112,31 @@ bool base32z_decode(const Stack& stack, V& value) {
 }
 
 std::string hex_to_base32z(const std::string& src);
+
+std::string hex_to_bytes(const std::string &hex);
+
+// Creates a hex string from a character sequence.
+template <typename It>
+std::string as_hex(It begin, It end) {
+    constexpr std::array<char, 16> lut{{'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'}};
+    std::string hex;
+    using std::distance;
+    hex.reserve(distance(begin, end) * 2);
+    while (begin != end) {
+        char c = *begin;
+        hex += lut[(c & 0xf0) >> 4];
+        hex += lut[c & 0x0f];
+        ++begin;
+    }
+    return hex;
+}
+
+template <typename String>
+inline std::string as_hex(const String &s) {
+    using std::begin;
+    using std::end;
+    return as_hex(begin(s), end(s));
+}
 
 /// Returns a random number from [0, n) using a static generator
 uint64_t uniform_distribution_portable(uint64_t n);

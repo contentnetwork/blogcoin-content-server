@@ -1,5 +1,7 @@
 #include "utils.hpp"
 
+#include <boost/beast/core/detail/base64.hpp>
+
 #include <chrono>
 
 #ifndef _WIN32
@@ -16,15 +18,47 @@ uint64_t get_time_ms() {
 }
 
 constexpr uint8_t hex_to_nibble(const char& ch) {
-    return (ch >= '0' && ch <= '9')
-               ? ch - 48
-               : ((ch >= 'A' && ch <= 'F')
-                      ? ch - 55
-                      : ((ch >= 'a' && ch <= 'f') ? ch - 87 : 0));
+    return
+        (ch >= '0' && ch <= '9') ? ch - '0' :
+        (ch >= 'A' && ch <= 'F') ? ch - 'A' + 10 :
+        (ch >= 'a' && ch <= 'f') ? ch - 'a' + 10 :
+        0;
 }
 
 constexpr uint8_t hexpair_to_byte(const char& hi, const char& lo) {
     return hex_to_nibble(hi) << 4 | hex_to_nibble(lo);
+}
+
+std::string hex_to_bytes(const std::string &hex) {
+    std::string result;
+    result.reserve(hex.size() / 2);
+    for (size_t i = 0, end = hex.size() & ~1; i < end; i += 2)
+        result.push_back(hexpair_to_byte(hex[i], hex[i+1]));
+    return result;
+}
+
+// TODO: stop relying on beast::detail
+namespace base64 = boost::beast::detail::base64;
+
+// base64 stuff was copied from boost 1.66 sources
+std::string base64_decode(std::string const& data) {
+    std::string dest;
+    dest.resize(base64::decoded_size(data.size()));
+    auto const result = base64::decode(&dest[0], data.data(), data.size());
+    dest.resize(result.first);
+    return dest;
+}
+
+static std::string base64_encode(std::uint8_t const* data, std::size_t len) {
+    std::string dest;
+    dest.resize(base64::encoded_size(len));
+    dest.resize(base64::encode(&dest[0], data, len));
+    return dest;
+}
+
+std::string base64_encode(std::string const& s) {
+    return base64_encode(reinterpret_cast<std::uint8_t const*>(s.data()),
+                         s.size());
 }
 
 std::string hex_to_base32z(const std::string& src) {
