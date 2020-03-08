@@ -164,7 +164,7 @@ ServiceNode::ServiceNode(boost::asio::io_context& ioc,
     }
 
     const std::string addr = buf;
-    LOKI_LOG(info, "Our loki address: {}", addr);
+    LOKI_LOG(info, "Our bittoro address: {}", addr);
 
     const auto pk_hex = util::as_hex(lokid_key_pair_.public_key);
 
