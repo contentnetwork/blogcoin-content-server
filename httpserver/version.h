@@ -6,7 +6,7 @@
 
 #define VERSION_MAJOR 1
 #define VERSION_MINOR 0
-#define VERSION_PATCH 9
+#define VERSION_PATCH 10
 
 #define LOKI_STRINGIFY2(val) #val
 #define LOKI_STRINGIFY(val) LOKI_STRINGIFY2(val)
@@ -30,7 +30,7 @@
 
 static void print_version() {
     LOKI_LOG(info,
-             "BitToro Storage Server v{}\n git commit hash: {}\n build time: {}",
+             "Bittoro Storage Server v{}\n git commit hash: {}\n build time: {}",
              STORAGE_SERVER_VERSION_STRING, STORAGE_SERVER_GIT_HASH_STRING,
              STORAGE_SERVER_BUILD_TIME);
 }
